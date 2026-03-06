@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Дескриптор серверного решения по XSD v2:
+  https://apps-api.moysklad.ru/xml/ns/appstore/app/v2/application-v2.xsd
+  Допустимые дочерние элементы ServerApplication: vendorApi, access, iframe/iframes, widgets, popups, buttons и др.
+-->
+<ServerApplication xmlns="https://apps-api.moysklad.ru/xml/ns/appstore/app/v2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="https://apps-api.moysklad.ru/xml/ns/appstore/app/v2 https://apps-api.moysklad.ru/xml/ns/appstore/app/v2/application-v2.xsd">
+
+    <vendorApi>
+        <endpointBase>https://reco.saas-rating.ru</endpointBase>
+    </vendorApi>
+
+    <access>
+        <resource>https://api.moysklad.ru/api/remap/1.2</resource>
+        <scope>custom</scope>
+        <permissions>
+            <good><view></view></good>
+            <demand><view></view></demand>
+            <retailDemand><view></view></retailDemand>
+        </permissions>
+    </access>
+
+    <iframes>
+        <iframe type="main" sourceUrl="https://reco.saas-rating.ru/settings.html"/>
+    </iframes>
+
+    <widgets>
+        <entity.product.edit>
+            <sourceUrl>https://reco.saas-rating.ru/widget.html</sourceUrl>
+            <height><fixed>240px</fixed></height>
+        </entity.product.edit>
+    </widgets>
+
+</ServerApplication>

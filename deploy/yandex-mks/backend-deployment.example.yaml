@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moysklad-reco-backend
+  labels:
+    app: moysklad-reco-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: moysklad-reco-backend
+  template:
+    metadata:
+      labels:
+        app: moysklad-reco-backend
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: backend
+          image: cr.yandex/<registry-id>/moysklad-reco-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: moysklad-reco-db
+                  key: url
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: moysklad-reco-db
+                  key: username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: moysklad-reco-db
+                  key: password
+            - name: VENDOR_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: moysklad-reco-vendor
+                  key: secretKey
+            - name: MOYSKLAD_VENDOR_APP_UID
+              valueFrom:
+                secretKeyRef:
+                  name: moysklad-reco-vendor
+                  key: appUid
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20

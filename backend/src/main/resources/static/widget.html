@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>С этим товаром чаще покупают</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Tahoma, Arial, sans-serif; margin: 0; padding: 12px; background: #ffffff; }
+        h2 { font-size: 16px; margin: 0 0 8px; }
+        ul { list-style: none; padding: 0; margin: 0; }
+        li { padding: 6px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+        .name { font-weight: 500; color: #111827; }
+        a.name { color: #186999; text-decoration: none; }
+        a.name:hover { text-decoration: underline; }
+        .meta { font-size: 12px; color: #6b7280; white-space: nowrap; }
+        .empty { font-size: 13px; color: #6b7280; }
+    </style>
+</head>
+<body>
+<h2>С этим товаром чаще покупают</h2>
+<div id="content" class="empty">Загрузка рекомендаций...</div>
+
+<script>
+    (function () {
+        const content = document.getElementById('content');
+        const params = new URLSearchParams(window.location.search);
+        const contextKey = params.get('contextKey') || '';
+        const limit = Number(params.get('limit') || '10');
+        let sessionToken = '';
+        let resolvedContextPromise = null;
+        let activeProductId = params.get('productId') || '';
+
+        async function resolveContext() {
+            if (sessionToken) {
+                return;
+            }
+            if (resolvedContextPromise) {
+                return resolvedContextPromise;
+            }
+            if (!contextKey) {
+                throw new Error('Не передан contextKey.');
+            }
+            resolvedContextPromise = fetch('/api/context/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contextKey: contextKey })
+            })
+                .then(resp => {
+                    if (!resp.ok) {
+                        throw new Error('Не удалось получить контекст (HTTP ' + resp.status + ')');
+                    }
+                    return resp.json();
+                })
+                .then(data => {
+                    sessionToken = data.sessionToken || '';
+                    if (!sessionToken) {
+                        throw new Error('Сервис не вернул session token.');
+                    }
+                })
+                .catch(err => {
+                    resolvedContextPromise = null;
+                    throw err;
+                });
+            return resolvedContextPromise;
+        }
+
+        async function fetchWithSession(url, options, allowRetry) {
+            const retry = allowRetry !== false;
+            await resolveContext();
+
+            const requestOptions = Object.assign({}, options || {});
+            requestOptions.headers = Object.assign({}, requestOptions.headers || {}, {
+                'Authorization': 'Bearer ' + sessionToken
+            });
+
+            const resp = await fetch(url, requestOptions);
+            if (resp.status === 401 && retry) {
+                sessionToken = '';
+                resolvedContextPromise = null;
+                await resolveContext();
+                return fetchWithSession(url, options, false);
+            }
+            return resp;
+        }
+
+        function renderRecommendations(data) {
+            if (!data || data.length === 0) {
+                content.textContent = 'Пока нет данных о совместных продажах этого товара.';
+                return;
+            }
+
+            const ul = document.createElement('ul');
+            data.forEach(item => {
+                const li = document.createElement('li');
+
+                const name = item.productUrl ? document.createElement('a') : document.createElement('span');
+                name.className = 'name';
+                name.textContent = item.name || 'Товар ' + item.productId;
+                if (item.productUrl) {
+                    name.href = item.productUrl;
+                    name.target = '_blank';
+                    name.rel = 'noopener noreferrer';
+                }
+
+                const meta = document.createElement('span');
+                meta.className = 'meta';
+                meta.textContent = (item.article ? 'Артикул ' + item.article + ' · ' : '') +
+                    'вместе в ' + item.supportCount + ' продажах';
+
+                li.appendChild(name);
+                li.appendChild(meta);
+                ul.appendChild(li);
+            });
+
+            content.innerHTML = '';
+            content.appendChild(ul);
+        }
+
+        async function loadRecommendations(productId) {
+            if (!productId) {
+                content.textContent = 'Ожидание контекста товара...';
+                return;
+            }
+
+            activeProductId = productId;
+            content.textContent = 'Загрузка рекомендаций...';
+
+            try {
+                const resp = await fetchWithSession(`/api/recommendations?productId=${encodeURIComponent(productId)}&limit=${encodeURIComponent(limit)}`);
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status);
+                }
+                const data = await resp.json();
+                if (activeProductId !== productId) {
+                    return;
+                }
+                renderRecommendations(data);
+            } catch (err) {
+                if (activeProductId === productId) {
+                    content.textContent = 'Ошибка загрузки рекомендаций: ' + err.message;
+                }
+            }
+        }
+
+        window.addEventListener('message', function (event) {
+            const message = event.data;
+            if (!message || typeof message !== 'object') {
+                return;
+            }
+            if (message.name !== 'Open') {
+                return;
+            }
+            loadRecommendations(message.objectId || '');
+        });
+
+        loadRecommendations(activeProductId);
+    })();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: moysklad-reco-backend
+spec:
+  ingressClassName: <your-ingress-class>
+  rules:
+    - host: reco.saas-rating.ru
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: moysklad-reco-backend
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - reco.saas-rating.ru
+      secretName: <your-tls-secret>

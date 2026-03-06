@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Настройки рекомендаций «Чаще покупают»</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- В боевом окружении можно подключить UI Kit МоегоСклада -->
+    <!-- <link rel="stylesheet" href="https://github.com/moysklad/html-marketplace-1.0-uikit/releases/latest/download/uikit.css"> -->
+    <style>
+        body { font-family: Tahoma, Arial, sans-serif; margin: 0; padding: 24px; background: #f5f5f7; }
+        .card { max-width: 640px; margin: 0 auto; background: #fff; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1); }
+        h1 { font-size: 20px; margin-bottom: 8px; }
+        p { margin: 0 0 16px; color: #4b5563; }
+        label { display: block; font-size: 14px; margin-bottom: 4px; color: #374151; }
+        input, select { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #d1d5db; font-size: 14px; box-sizing: border-box; }
+        .field { margin-bottom: 16px; }
+        button { padding: 8px 16px; border-radius: 6px; border: none; background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
+        button:disabled { background: #9ca3af; cursor: default; }
+        .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .secondary { background: #0f766e; }
+        .status { margin-top: 12px; font-size: 13px; }
+        .status.ok { color: #16a34a; }
+        .status.err { color: #dc2626; }
+        .status.loading { color: #6b7280; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>Настройки блока «Чаще покупают»</h1>
+    <p>Эта страница открывается в iframe МоегоСклада. Здесь администратор настраивает период анализа и пороги рекомендаций.</p>
+
+    <form id="settings-form">
+        <div class="field">
+            <label for="analysisDays">Период анализа (дней)</label>
+            <input id="analysisDays" name="analysisDays" type="number" min="1" max="365" disabled>
+        </div>
+
+        <div class="field">
+            <label for="minSupport">Минимальное количество совместных продаж</label>
+            <input id="minSupport" name="minSupport" type="number" min="1" max="100" disabled>
+        </div>
+
+        <div class="field">
+            <label for="limit">Количество рекомендаций</label>
+            <input id="limit" name="limit" type="number" min="1" max="20" disabled>
+        </div>
+
+        <div class="actions">
+            <button type="submit" disabled>Сохранить настройки</button>
+            <button type="button" id="rebuild-button" class="secondary" disabled>Обновить статистику</button>
+        </div>
+        <div id="status" class="status"></div>
+    </form>
+</div>
+
+<script>
+    (function () {
+        const form = document.getElementById('settings-form');
+        const statusEl = document.getElementById('status');
+        const submitButton = form.querySelector('button[type="submit"]');
+        const rebuildButton = document.getElementById('rebuild-button');
+        const params = new URLSearchParams(window.location.search);
+        const contextKey = params.get('contextKey') || '';
+        let sessionToken = '';
+        let rebuildPollId = null;
+        let formReady = false;
+        let saveInProgress = false;
+        let rebuildInProgress = false;
+        const defaults = {
+            analysisDays: 90,
+            minSupport: 3,
+            limit: 5
+        };
+
+        function syncControls() {
+            const canEdit = formReady && !saveInProgress;
+            form.analysisDays.disabled = !canEdit;
+            form.minSupport.disabled = !canEdit;
+            form.limit.disabled = !canEdit;
+            submitButton.disabled = !canEdit;
+            rebuildButton.disabled = !formReady || rebuildInProgress;
+            rebuildButton.textContent = rebuildInProgress ? 'Идет обновление' : 'Обновить статистику';
+        }
+
+        function applySettings(data) {
+            form.analysisDays.value = String(data.analysisDays);
+            form.minSupport.value = String(data.minSupport);
+            form.limit.value = String(data.limit);
+        }
+
+        function showLoading(message) {
+            statusEl.textContent = message;
+            statusEl.className = 'status loading';
+        }
+
+        function clearStatus() {
+            statusEl.textContent = '';
+            statusEl.className = 'status';
+        }
+
+        function applyRebuildStatus(data) {
+            rebuildInProgress = !!(data && data.rebuildInProgress);
+            syncControls();
+        }
+
+        async function fetchRebuildStatus() {
+            const resp = await fetchWithSession('/api/settings/rebuild-status');
+            if (!resp.ok) {
+                throw new Error('HTTP ' + resp.status);
+            }
+            const data = await resp.json();
+            applyRebuildStatus(data);
+            return data;
+        }
+
+        function startRebuildPolling() {
+            if (rebuildPollId !== null) {
+                return;
+            }
+            rebuildPollId = window.setInterval(async function () {
+                try {
+                    await fetchRebuildStatus();
+                } catch (e) {
+                    // не ломаем интерфейс из-за временной ошибки polling
+                }
+            }, 3000);
+        }
+
+        async function resolveContext() {
+            if (sessionToken) {
+                return;
+            }
+            if (!contextKey) {
+                throw new Error('Не передан contextKey.');
+            }
+            const resp = await fetch('/api/context/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contextKey: contextKey })
+            });
+            if (!resp.ok) {
+                throw new Error('Не удалось получить контекст (HTTP ' + resp.status + ')');
+            }
+            const data = await resp.json();
+            sessionToken = data.sessionToken || '';
+            if (!sessionToken) {
+                throw new Error('Сервис не вернул session token.');
+            }
+        }
+
+        async function fetchWithSession(url, options, allowRetry) {
+            const retry = allowRetry !== false;
+            await resolveContext();
+
+            const requestOptions = Object.assign({}, options || {});
+            requestOptions.headers = Object.assign({}, requestOptions.headers || {}, {
+                'Authorization': 'Bearer ' + sessionToken
+            });
+
+            const resp = await fetch(url, requestOptions);
+            if (resp.status === 401 && retry) {
+                sessionToken = '';
+                await resolveContext();
+                return fetchWithSession(url, options, false);
+            }
+            return resp;
+        }
+
+        async function loadSettings() {
+            try {
+                const resp = await fetchWithSession('/api/settings');
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status);
+                }
+                const data = await resp.json();
+                applySettings({
+                    analysisDays: typeof data.analysisDays === 'number' ? data.analysisDays : defaults.analysisDays,
+                    minSupport: typeof data.minSupport === 'number' ? data.minSupport : defaults.minSupport,
+                    limit: typeof data.limit === 'number' ? data.limit : defaults.limit
+                });
+                applyRebuildStatus(data);
+                clearStatus();
+            } catch (e) {
+                applySettings(defaults);
+                applyRebuildStatus({ rebuildInProgress: false });
+                statusEl.textContent = 'Не удалось загрузить сохранённые настройки, показаны значения по умолчанию.';
+                statusEl.className = 'status err';
+            } finally {
+                formReady = true;
+                syncControls();
+                startRebuildPolling();
+            }
+        }
+
+        showLoading('Загрузка настроек...');
+        syncControls();
+        resolveContext()
+            .then(loadSettings)
+            .catch(err => {
+                applySettings(defaults);
+                formReady = true;
+                applyRebuildStatus({ rebuildInProgress: false });
+                statusEl.textContent = 'Ошибка инициализации контекста: ' + err.message;
+                statusEl.className = 'status err';
+            });
+
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            clearStatus();
+            saveInProgress = true;
+            syncControls();
+
+            const payload = {
+                analysisDays: Number(form.analysisDays.value),
+                minSupport: Number(form.minSupport.value),
+                limit: Number(form.limit.value)
+            };
+
+            try {
+                const resp = await fetchWithSession('/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status);
+                }
+
+                statusEl.textContent = 'Настройки сохранены.';
+                statusEl.classList.add('ok');
+            } catch (err) {
+                statusEl.textContent = 'Ошибка при сохранении настроек: ' + err.message;
+                statusEl.classList.add('err');
+            } finally {
+                saveInProgress = false;
+                syncControls();
+            }
+        });
+
+        rebuildButton.addEventListener('click', async function () {
+            if (rebuildInProgress || !formReady) {
+                return;
+            }
+
+            clearStatus();
+
+            try {
+                const resp = await fetchWithSession('/api/settings/rebuild', {
+                    method: 'POST'
+                });
+
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status);
+                }
+
+                const data = await resp.json();
+                applyRebuildStatus(data);
+                startRebuildPolling();
+                statusEl.textContent = 'Пересчет статистики запущен.';
+                statusEl.className = 'status ok';
+            } catch (err) {
+                statusEl.textContent = 'Ошибка при запуске пересчета: ' + err.message;
+                statusEl.className = 'status err';
+            }
+        });
+    })();
+</script>
+</body>
+</html>
